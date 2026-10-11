@@ -1,0 +1,14 @@
+{
+  "cities": [
+    {"name": "北京", "province": "北京", "tags": ["历史", "人文", "美食"], "best_season": "4-5月 / 9-10月", "avg_days": 4, "lng": 116.4074, "lat": 39.9042},
+    {"name": "上海", "province": "上海", "tags": ["都市", "人文", "美食"], "best_season": "3-5月 / 10-11月", "avg_days": 3, "lng": 121.4737, "lat": 31.2304},
+    {"name": "西安", "province": "陕西", "tags": ["历史", "人文", "美食"], "best_season": "3-5月 / 9-11月", "avg_days": 3, "lng": 108.9398, "lat": 34.3416},
+    {"name": "成都", "province": "四川", "tags": ["休闲", "美食", "自然"], "best_season": "3-6月 / 9-11月", "avg_days": 3, "lng": 104.0665, "lat": 30.5728},
+    {"name": "重庆", "province": "重庆", "tags": ["都市", "美食", "夜景"], "best_season": "3-5月 / 9-11月", "avg_days": 3, "lng": 106.5516, "lat": 29.5630},
+    {"name": "杭州", "province": "浙江", "tags": ["自然", "人文", "休闲"], "best_season": "3-5月 / 9-11月", "avg_days": 3, "lng": 120.1551, "lat": 30.2741},
+    {"name": "厦门", "province": "福建", "tags": ["海滨", "休闲", "摄影"], "best_season": "3-5月 / 9-11月", "avg_days": 3, "lng": 118.0894, "lat": 24.4798},
+    {"name": "三亚", "province": "海南", "tags": ["海滨", "度假", "亲子"], "best_season": "10月-次年4月", "avg_days": 4, "lng": 109.5082, "lat": 18.2528},
+    {"name": "丽江", "province": "云南", "tags": ["古镇", "自然", "摄影", "高海拔"], "best_season": "4-5月 / 9-10月", "avg_days": 3, "lng": 100.2330, "lat": 26.8721},
+    {"name": "大理", "province": "云南", "tags": ["自然", "古镇", "休闲"], "best_season": "3-5月 / 9-11月", "avg_days": 3, "lng": 100.2676, "lat": 25.6065}
+  ]
+}

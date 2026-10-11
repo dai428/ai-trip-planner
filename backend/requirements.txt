@@ -1,0 +1,16 @@
+# ==================== 运行必需 ====================
+fastapi==0.143.0
+uvicorn==0.54.0
+pydantic==2.14.0
+jieba==0.42.1
+
+# ==================== 测试 ====================
+pytest==9.1.1
+httpx==0.28.1
+
+# ==================== 可选：更强的检索 ====================
+# 默认关闭。开启后检索链路从「BM25 + 字符 n-gram 双路」
+# 升级为「BM25 + 字符 n-gram + 向量 三路召回 → Cross-encoder 精排」。
+#   Windows PS: $env:RAG_ENABLE_VECTOR=1; $env:RAG_ENABLE_RERANK=1; uvicorn app.api.main:app
+# sentence-transformers>=3.0.0
+# torch>=2.2.0
