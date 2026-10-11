@@ -1,0 +1,24 @@
+# 运行产物与本地环境
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# 数据库（本地生成，不入库）
+backend/db/*.db
+backend/db/*.db-journal
+
+# 前端
+node_modules/
+dist/
+
+# 编辑器与系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 环境变量
+.env
+.env.local
