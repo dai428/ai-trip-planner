@@ -97,6 +97,20 @@ AVG_SPEED_KMH = 75.0      # 长途自驾平均时速（含服务区休息）
 #   一律拒收 —— 出发地/目的地本来就该填城市，而不是某个景点门口。
 AMAP_ACCEPT_LEVELS = {"省", "市", "区县"}
 
+# ---------- 高德 POI 候选池 ----------
+# 【它解决什么】
+#   把"某城市有什么可玩的"提前攒成一张本地表，供大模型从中选点。
+#   否则每次生成行程都要临时外呼几十次，既慢又费配额，候选还少得可怜。
+#
+# 【30 天 TTL 是怎么定的】
+#   POI 的存续以月计：一家店开张/关门不是日更的事情。
+#   定太短（如 1 天）等于每次都用新鲜度换延迟和配额，不划算；
+#   定太长（如 1 年）会积累已停业的点。30 天是"够新且省"的折中。
+POI_POOL_ENABLED = os.getenv("POI_POOL_ENABLED", "1") == "1"
+POI_POOL_TTL_DAYS = int(os.getenv("POI_POOL_TTL_DAYS", "30"))
+POI_POOL_MAX_PER_CITY = int(os.getenv("POI_POOL_MAX_PER_CITY", "120"))
+POI_POOL_PAGE_SIZE = 25          # 高德单页上限就是 25，别调大
+
 # ---------- 大模型（可选增强）----------
 # 与高德同样的哲学：配了就启用，没配或调用失败自动降级为纯规则生成。
 # 走 OpenAI 兼容协议，因此换厂商只改这三行配置，代码不动。
@@ -112,9 +126,27 @@ LLM_API_BASE = os.getenv(
     "LLM_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"
 ).rstrip("/")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen3.8-27b")
-LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
+# 超时给得比较宽：实测这个模型生成一份 5 天行程需要 30~40 秒，
+# 关掉思考模式前更是要 117 秒。定 60 秒会让正常请求被误判为失败而白白降级。
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.4"))
+
+# 思考模式。默认关闭：实测它**不影响**结构化输出的顶层形状
+# （开与关都返回单元素数组，见 llm_service 模块头部的实测契约），
+# 却会额外产生数百个 reasoning token、把耗时从几秒推到二十秒。
+# 想要更强的排期质量时可以打开，代价是响应变慢。
+LLM_ENABLE_THINKING = os.getenv("LLM_ENABLE_THINKING", "0") == "1"
+
+# 送进提示词的候选**安全上限**（不是目标值）。
+# 【为什么需要它，以及为什么不是固定值】
+#   真正的额度由 trip_service 按"这个城市要玩几天、节奏多紧"算出来，
+#   让候选数随行程规模增长。这里只是防止极端输入（如 6 城 30 天）
+#   把提示词撑爆上下文 —— 它是兜底的天花板，不是默认用量。
+#   池子存宽（供筛选、供兜底），提示词喂窄（省 token、降干扰）。
+LLM_PROMPT_CANDIDATES = int(os.getenv("LLM_PROMPT_CANDIDATES", "40"))
+LLM_PROMPT_CANDIDATES_FOOD = int(os.getenv("LLM_PROMPT_CANDIDATES_FOOD", "20"))
+LLM_PROMPT_CANDIDATES_LODGING = int(os.getenv("LLM_PROMPT_CANDIDATES_LODGING", "8"))
 
 # ---------- 路线与中途推荐 ----------
 STOP_DISTANCE_KM = 500.0     # 超过这个里程，建议中途停留

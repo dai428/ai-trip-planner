@@ -77,6 +77,13 @@ class TripPlan(BaseModel):
     budget: list[BudgetItem] = Field(default_factory=list, description="预算拆分")
     created_at: datetime = Field(..., description="生成时间")
 
+    # 【为什么要暴露"这份行程是谁排的"】
+    #   生成有两条路径：大模型编排、规则生成。两者结果看起来都"像模像样"，
+    #   用户无从分辨。把来源显式写进契约，前端就能如实标注，
+    #   降级也就不会被误当成"大模型就这水平"。
+    generator: str = Field("rule", description="编排来源：llm / rule")
+    generator_note: str | None = Field(None, description="编排来源的补充说明（如降级原因）")
+
 
 # ==================== 打包清单 ====================
 

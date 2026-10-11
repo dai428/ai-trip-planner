@@ -233,14 +233,21 @@ onMounted(async () => {
       <div v-if="error" class="alert">{{ error }}</div>
 
       <!-- 路线模式下，"生成"由 RoutePlanner 的采纳按钮触发，这里不再重复一个按钮 -->
-      <div v-if="mode === 'cities'" class="row-between wrap" style="gap: 12px">
-        <span class="section-hint">
-          {{ picked.length ? `将生成 ${picked.join(' → ')} · ${days} 天的行程` : '请先选择目的地' }}
-        </span>
-        <button class="btn btn-primary btn-lg" :disabled="submitting || !picked.length" @click="submit">
-          <span v-if="submitting" class="spinner" />
-          {{ submitting ? '正在生成…' : '生成行程' }}
-        </button>
+      <div v-if="mode === 'cities'" class="stack" style="gap: 8px">
+        <div class="row-between wrap" style="gap: 12px">
+          <span class="section-hint">
+            {{ picked.length ? `将生成 ${picked.join(' → ')} · ${days} 天的行程` : '请先选择目的地' }}
+          </span>
+          <button class="btn btn-primary btn-lg" :disabled="submitting || !picked.length" @click="submit">
+            <span v-if="submitting" class="spinner" />
+            {{ submitting ? '正在生成…' : '生成行程' }}
+          </button>
+        </div>
+        <!-- 说明为什么慢：生成要经过"高德召回候选 → 大模型选点编排"，
+             不提前说清楚，用户会以为页面卡死了。 -->
+        <p v-if="submitting" class="section-hint">
+          正在汇集候选地点并编排逐日行程，通常需要 15–40 秒，请稍候…
+        </p>
       </div>
       <div v-else-if="submitting" class="row" style="gap: 10px; color: var(--text-dim)">
         <span class="spinner" />

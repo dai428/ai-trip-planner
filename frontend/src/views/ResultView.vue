@@ -144,6 +144,9 @@ onMounted(async () => {
               <span v-if="dateRange" class="chip">{{ dateRange }}</span>
               <span class="chip">{{ plan.pace }}节奏</span>
               <span class="chip">预算约 ¥{{ Math.round(totalBudget).toLocaleString('zh-CN') }}</span>
+              <span class="chip" :title="plan.generator_note || ''">
+                {{ plan.generator === 'llm' ? '✦ AI 编排' : '规则生成' }}
+              </span>
             </div>
           </div>
 
@@ -163,6 +166,12 @@ onMounted(async () => {
             {{ copied ? '已复制' : '复制' }}
           </button>
         </div>
+
+        <!-- 降级时说明原因：静默降级最难排查，用户会以为是"大模型就这水平" -->
+        <p v-if="plan.generator === 'rule' && plan.generator_note" class="section-hint">
+          本次由规则引擎编排（{{ plan.generator_note }}）。规则生成同样会结合攻略库与
+          高德候选池，只是不经过大模型选点。
+        </p>
 
         <p v-if="dirty" class="section-hint">
           你已手动调整过顺序——调整只作用于当前页面，刷新后会回到原始安排。

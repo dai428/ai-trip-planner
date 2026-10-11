@@ -60,6 +60,8 @@ class Poi:
     lat: float | None = None
     category: str = ""
     tags: list[str] = field(default_factory=list)
+    area: str = ""          # 所在区县（高德 adname），用于「位于XX区」这类表达
+    type_chain: list[str] = field(default_factory=list)   # 完整分类链，供上层做二次筛选
 
 
 # ==================== 简易 TTL 缓存 ====================
@@ -207,6 +209,36 @@ def driving(origin: GeoPoint, destination: GeoPoint) -> DriveResult:
     return _cached(key, produce) or estimate_drive(origin, destination)
 
 
+def _parse_poi(p: dict) -> Poi | None:
+    """把高德返回的一条 pois 元素转成 Poi。
+
+    抽出来是因为 place_text / place_recall 都用它 —— 字段解析只写一遍，
+    以后高德改字段名也只需要改这一个地方。
+    """
+    name = (p.get("name") or "").strip()
+    if not name:
+        return None
+
+    lng = lat = None
+    loc = (p.get("location") or "").split(",")
+    if len(loc) == 2 and loc[0]:
+        try:
+            lng, lat = float(loc[0]), float(loc[1])
+        except ValueError:
+            lng = lat = None
+
+    chain = [s for s in (p.get("type") or "").split(";") if s]
+    return Poi(
+        name=name,
+        address=p.get("address") if isinstance(p.get("address"), str) else "",
+        lng=lng, lat=lat,
+        category=chain[0] if chain else "",
+        tags=chain,
+        area=(p.get("adname") or "").strip(),
+        type_chain=chain,
+    )
+
+
 def place_text(keywords: str, city: str, limit: int = 8, types: str | None = None) -> list[Poi]:
     """关键词/分类检索 POI（用于没有本地攻略的城市）。
 
@@ -225,25 +257,50 @@ def place_text(keywords: str, city: str, limit: int = 8, types: str | None = Non
             return []
         out: list[Poi] = []
         for p in data.get("pois") or []:
-            loc = (p.get("location") or "").split(",")
-            lng = lat = None
-            if len(loc) == 2:
-                try:
-                    lng, lat = float(loc[0]), float(loc[1])
-                except ValueError:
-                    lng = lat = None
-            name = p.get("name") or ""
-            if not name:
-                continue
-            out.append(Poi(
-                name=name,
-                address=p.get("address") if isinstance(p.get("address"), str) else "",
-                lng=lng, lat=lat,
-                category=(p.get("type") or "").split(";")[0],
-            ))
+            poi = _parse_poi(p)
+            if poi:
+                out.append(poi)
         return out
 
     return _cached(("poi", keywords, city, limit, types or ""), produce) or []
+
+
+def place_recall(keyword: str, city: str, types: str | None = None,
+                 pages: int = 2, page_size: int = 25) -> list[Poi]:
+    """宽召回：同一条件翻页取多页，用于建「候选池」。
+
+    【跟 place_text 的区别】
+        place_text 是"够用就行"——只要几条，取第一页。
+        place_recall 是"宁可多取"——候选池要的是**供给充足**，
+        后续再按偏好排序、按分类过滤、交给大模型挑。
+        把两个诉求塞进一个函数会让参数含义变得含糊，所以拆开。
+
+    【翻页的边界】
+        高德的 offset 上限是 25，page 理论上限 100，但实际总量有限：
+        超过真实结果数时它仍返回 200，只是 pois 为空数组。
+        所以一旦某页为空就立刻停 —— 不做无谓的请求，也避免死循环。
+    """
+    if not enabled():
+        return []
+
+    def produce():
+        out: list[Poi] = []
+        seen: set[str] = set()
+        for page in range(1, max(pages, 1) + 1):
+            data = _get("/place/text", keywords=keyword, city=city, types=types,
+                        citylimit="true", offset=min(page_size, 25), page=page,
+                        extensions="base")
+            pois = (data or {}).get("pois") or []
+            if not pois:
+                break
+            for raw in pois:
+                poi = _parse_poi(raw)
+                if poi and poi.name not in seen:
+                    seen.add(poi.name)
+                    out.append(poi)
+        return out
+
+    return _cached(("recall", keyword, city, types or "", pages, page_size), produce) or []
 
 
 # 城市级行政区后缀。用来挡住「朝阳区」「陈巴尔虎旗」这类下级区划冒充城市。

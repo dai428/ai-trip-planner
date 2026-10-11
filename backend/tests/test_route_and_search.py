@@ -411,17 +411,129 @@ def test_route_rejects_garbage_when_amap_is_fuzzy(monkeypatch):
         route_service.plan_route("不存在的城市xyz", "大理", 5)
 
 
-# ==================== 无攻略城市：高德 POI 兜底 ====================
+# ==================== 候选池：宽召回 + 落盘 + 过滤 ====================
 
-def _fake_pois():
-    """模拟高德分类检索的返回。"""
-    return [
-        amap_service.Poi(name="天门山国家森林公园", address="天门路", category="风景名胜"),
-        amap_service.Poi(name="张家界土司城", address="南庄坪", category="风景名胜"),
-    ]
+def _poi(name, chain, address="", area="永定区"):
+    """按高德返回的形状造一个 Poi：category 取分类链第一段。"""
+    return amap_service.Poi(
+        name=name, address=address, lng=110.0, lat=29.0,
+        category=chain[0], tags=list(chain), area=area, type_chain=list(chain),
+    )
 
 
-def test_poi_fallback_fills_uncovered_city(monkeypatch):
+def _recall_by_type(types: str):
+    """模拟 amap_service.place_recall 的分类返回。"""
+    if types == "110000":
+        return [
+            _poi("天门山国家森林公园", ["风景名胜", "公园广场", "公园"]),
+            _poi("张家界土司城", ["风景名胜", "风景名胜", "古迹"]),
+            _poi("袁家界景区", ["风景名胜", "风景名胜", "自然"]),
+        ]
+    if types == "140000":
+        return [
+            # 白名单该收的：博物馆
+            _poi("张家界市博物馆", ["科教文化服务", "博物馆", "博物馆"]),
+            # 白名单该拒的：学校 / 科研机构 —— 分类链第一段是大类"科教文化服务"，
+            # 若拿白名单去比整条链，"文化"会命中这个大类和全部放行。
+            _poi("张家界市第一中学", ["科教文化服务", "学校", "中学"]),
+            _poi("某林业科学研究所", ["科教文化服务", "科研机构", "科研机构"]),
+        ]
+    if types == "050000":
+        return [
+            _poi("胡师傅三下锅", ["餐饮服务", "中餐厅", "中餐厅"]),
+            _poi("土家风味楼", ["餐饮服务", "中餐厅", "中餐厅"]),
+        ]
+    if types == "100000":
+        return [
+            _poi("张家界荷花主题酒店", ["住宿服务", "宾馆酒店", "宾馆酒店"],
+                 address="南庄坪大庸路旺角佳园二期旁"),
+        ]
+    return []
+
+
+@pytest.fixture
+def fake_amap(monkeypatch):
+    """打开"高德已配置 + 召回可控"，让用例能走完整的候选池路径。"""
+    from app.services import poi_pool_service
+
+    monkeypatch.setattr(config, "AMAP_API_KEY", "fake-key")
+    monkeypatch.setattr(poi_pool_service, "_last_empty", {})
+    monkeypatch.setattr(
+        amap_service, "place_recall",
+        lambda kw, city, types=None, pages=2, page_size=25: _recall_by_type(types or ""),
+    )
+    return poi_pool_service
+
+
+def test_pool_wide_recall_fills_candidates(fake_amap):
+    """候选池要跨分类宽召回，而不是一个关键词拿几条就完事。
+
+    大模型"从候选里挑"的质量直接取决于候选的丰富度，
+    所以池子必须够宽 —— 这也是把"临时查询"改成"落盘池子"的初衷。
+    """
+    items = fake_amap.candidates("张家界")
+    by_kind: dict[str, int] = {}
+    for it in items:
+        by_kind[it["kind"]] = by_kind.get(it["kind"], 0) + 1
+
+    assert by_kind["景点"] == 4      # 110000 三条 + 140000 一条（博物馆）
+    assert by_kind["美食"] == 2
+    assert by_kind["住宿"] == 1
+    assert all(it["origin"] == "amap" for it in items)
+
+
+def test_pool_whitelist_skips_category_root(fake_amap):
+    """白名单必须只比分类链的子段，不能比第一段大类。
+
+    这是一个真实踩过的坑：白名单里有"文化"，而大类是"科教文化服务"，
+    拿整条链去比会让 140000 分类**全部通过**，
+    实测就是这么把「首都儿科研究所」「中国社会科学院」放进景点池的。
+    """
+    names = [it["name"] for it in fake_amap.candidates("张家界", kind="景点")]
+    assert "张家界市博物馆" in names
+    assert "张家界市第一中学" not in names
+    assert "某林业科学研究所" not in names
+
+
+def test_pool_denies_noise_by_name(fake_amap):
+    """名字黑名单兜住分类判不出来的噪声（停车场、售票处之类）。"""
+    from app.services.poi_pool_service import _relevant
+
+    assert not _relevant(_poi("天门山景区停车场", ["风景名胜", "交通设施", "停车场"]), None)
+    assert not _relevant(_poi("游客中心售票处", ["风景名胜", "风景名胜", "景区"]), None)
+    assert _relevant(_poi("天门山国家森林公园", ["风景名胜", "公园广场", "公园"]), None)
+
+
+def test_pool_ttl_expiry_triggers_refetch(fake_amap, monkeypatch):
+    """池子里的数据过期后要重新召回，而不是一直用旧的。"""
+    from datetime import datetime, timedelta
+
+    from app import config as cfg
+
+    fake_amap.refresh("张家界")
+    assert fake_amap.candidates("张家界", kind="景点")
+
+    # 把所有条目的 fetched_at 往前推 31 天（TTL 是 30 天）
+    import sqlite3
+    old = (datetime.now() - timedelta(days=31)).isoformat()
+    with sqlite3.connect(cfg.DB_PATH) as conn:
+        conn.execute("UPDATE poi_pool SET fetched_at = ?", (old,))
+
+    assert fake_amap._is_stale("张家界", "景点") is True
+
+
+def test_pool_negative_cache_stops_hammering(fake_amap, monkeypatch):
+    """高德返回空时要冷却，否则每个请求都会重打一轮、把配额烧光。"""
+    monkeypatch.setattr(
+        amap_service, "place_recall",
+        lambda *a, **k: [],          # 永远返回空
+    )
+    fake_amap.refresh("没有覆盖的城市")
+    # 刚试过且为空 → 不该再判为"需要刷新"
+    assert fake_amap._is_stale("没有覆盖的城市", "景点") is False
+
+
+def test_poi_pool_fills_uncovered_city(fake_amap):
     """没有本地攻略的城市也必须生成出有内容的行程。
 
     曾经的行为是：攻略库里查不到 → 每天 0 个活动。
@@ -429,8 +541,6 @@ def test_poi_fallback_fills_uncovered_city(monkeypatch):
     """
     from app.models.trip import TripRequest
     from app.services import trip_service
-
-    monkeypatch.setattr(amap_service, "place_text", lambda *a, **k: _fake_pois())
 
     plan = trip_service.generate_trip(
         TripRequest(cities=["张家界"], days=2, preferences=["自然"], pace="标准")
@@ -440,30 +550,46 @@ def test_poi_fallback_fills_uncovered_city(monkeypatch):
         assert day.activities, f"D{day.day} 是空白的"
         for a in day.activities:
             assert a.source and a.source.startswith("高德POI")
+    # 酒店名进住宿栏，而不是门牌号
+    assert plan.itinerary[0].lodging == "张家界荷花主题酒店"
 
 
-def test_covered_city_does_not_use_poi(monkeypatch):
-    """有本地攻略的城市必须走 RAG，不能被 POI 覆盖 —— 否则高质量内容被降级了。"""
+def test_covered_city_merges_guide_and_pool(monkeypatch, fake_amap):
+    """有攻略的城市：攻略打底，高德**补充**长尾 —— 而不是被 POI 顶掉。
+
+    v0.2 是"有攻略就不找高德"，那会让两种城市的候选数量差一个数量级。
+    现在改成合并：攻略条目优先（有加成），高德的长尾照样进来供模型挑选。
+    """
     from app.models.trip import TripRequest
     from app.services import trip_service
-
-    def boom(*a, **k):
-        raise AssertionError("有攻略的城市不该调用高德 POI")
-
-    monkeypatch.setattr(amap_service, "place_text", boom)
 
     plan = trip_service.generate_trip(
         TripRequest(cities=["成都"], days=2, preferences=["美食"], pace="标准")
     )
-    sources = [a.source for d in plan.itinerary for a in d.activities]
-    assert sources and all(s.startswith("成都 ·") for s in sources)
+    sources = {a.source for d in plan.itinerary for a in d.activities}
+    assert any(s and s.startswith("本地攻略") for s in sources), "攻略条目应被采用"
+    # 未生成大模型时走规则路径，至少不能崩、且每天有内容
+    for day in plan.itinerary:
+        assert day.activities
+
+
+def test_guide_ranks_above_amap_for_same_kind(fake_amap):
+    """同等条件下攻略条目应排在前面（人工整理的可靠性高于机器召回）。"""
+    from app.services import trip_service
+
+    pool = trip_service._merge_pool("成都", ["美食"], {"景点": 10, "美食": 10, "住宿": 3})
+    origins = [it["origin"] for it in pool["美食"]]
+    assert "guide" in origins
+    if "amap" in origins:
+        assert origins.index("guide") < origins.index("amap")
 
 
 def test_poi_fallback_available_without_key(monkeypatch):
-    """没配 Key 时 place_text 返回空，不应崩，只是行程里没有活动。"""
+    """没配 Key 时候选池拿不到东西，但不应崩 —— 只是行程里没有活动。"""
     from app.models.trip import TripRequest
     from app.services import trip_service
 
+    monkeypatch.setattr(config, "AMAP_API_KEY", "")
     plan = trip_service.generate_trip(
         TripRequest(cities=["张家界"], days=1, preferences=[], pace="标准")
     )
@@ -479,25 +605,6 @@ def test_activity_note_drops_empty_duration():
     assert _activity_note({"area": "武陵山大道1号"}) == "武陵山大道1号"
     assert _activity_note({"area": "西湖区", "duration": "2-3 小时"}) == "西湖区 ｜ 建议 2-3 小时"
     assert _activity_note({}) == ""
-
-
-def test_poi_lodging_shows_hotel_name(monkeypatch):
-    """住宿栏要显示酒店名，不是门牌号。"""
-    from app.models.trip import TripRequest
-    from app.services import trip_service
-
-    monkeypatch.setattr(
-        amap_service, "place_text",
-        lambda kw, city, limit=8, types=None: (
-            [amap_service.Poi(name="张家界荷花主题酒店", address="南庄坪大庸路旺角佳园二期旁",
-                              category="住宿服务")]
-            if types == "100000" else []
-        ),
-    )
-    plan = trip_service.generate_trip(
-        TripRequest(cities=["张家界"], days=1, preferences=[], pace="标准")
-    )
-    assert plan.itinerary[0].lodging == "张家界荷花主题酒店"
 
 
 # ==================== 依赖自检 ====================

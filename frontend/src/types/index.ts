@@ -38,6 +38,16 @@ export interface BudgetItem {
   amount: number
 }
 
+/**
+ * 一份行程的编排来源。
+ *
+ * 后端有两条生成路径，结果看上去都"像模像样"，用户无从分辨：
+ *   llm  —— 大模型从候选池里选点并编排
+ *   rule —— 规则生成（大模型未配置 / 超时 / 返回不合规时的兜底）
+ * 所以后端把它显式放进契约，前端如实标注。降级不该被误读成"大模型就这水平"。
+ */
+export type Generator = 'llm' | 'rule'
+
 export interface TripPlan {
   id: string
   cities: string[]
@@ -47,6 +57,45 @@ export interface TripPlan {
   itinerary: DayPlan[]
   budget: BudgetItem[]
   created_at: string
+  generator: Generator
+  generator_note: string | null
+}
+
+export interface PoiItem {
+  name: string
+  kind: string
+  area: string
+  address: string
+  category: string
+  tags: string[]
+  origin: 'amap' | 'guide'
+  source: string
+}
+
+export interface PoiPoolView {
+  city: string
+  count: number
+  by_kind: Record<string, number>
+  amap_enabled: boolean
+  items: PoiItem[]
+}
+
+export interface LlmStatus {
+  enabled: boolean
+  mode: 'llm' | 'rule'
+  model: string | null
+  api_base: string | null
+  thinking: boolean
+  key_masked: string | null
+  fallback: string | null
+  note: string
+}
+
+export interface PoiPoolStats {
+  enabled: boolean
+  total: number
+  ttl_days?: number
+  cities: Record<string, Record<string, number>>
 }
 
 export interface PackingCategory {

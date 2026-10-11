@@ -18,15 +18,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import config
 from app.api.routes.meta import router as meta_router
+from app.api.routes.poi import router as poi_router
 from app.api.routes.share import router as share_router
 from app.api.routes.trip import router as trip_router
-from app.services import storage_service
+from app.services import poi_pool_service, storage_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动时建表，关闭时留白（SQLite 连接用完即关，无需清理）。"""
     storage_service.init_db()
+    poi_pool_service.init_db()
     yield
 
 
@@ -70,4 +72,5 @@ def health_check() -> dict[str, str]:
 
 app.include_router(meta_router)
 app.include_router(trip_router)
+app.include_router(poi_router)
 app.include_router(share_router)

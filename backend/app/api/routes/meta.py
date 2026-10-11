@@ -8,7 +8,7 @@
 
 from fastapi import APIRouter, Query
 
-from app.services import amap_service, guide_service
+from app.services import amap_service, guide_service, llm_service, poi_pool_service
 from app.services.city_service import list_cities_meta, search_cities
 
 router = APIRouter(prefix="/api/meta", tags=["元信息"])
@@ -47,3 +47,50 @@ def get_preferences() -> dict:
 def get_rag_stats() -> dict:
     """返回语料规模与实际启用的召回通道。"""
     return guide_service.corpus_stats()
+
+
+@router.get("/llm", summary="大模型接入自检")
+def get_llm_status() -> dict:
+    """暴露当前是"大模型编排"还是"规则生成"（不返回密钥原文）。"""
+    return llm_service.status()
+
+
+@router.get("/poi", summary="候选池自检")
+def get_poi_status() -> dict:
+    """返回池子里各城市各类别的条目数，用来判断候选是否充足。
+
+    池子是空的通常意味着"还没生成过该城市的行程"（按需召回），
+    而不一定是故障 —— 所以这里同时给出 enabled 与 ttl_days 供对照。
+    """
+    return poi_pool_service.pool_stats()
+
+
+@router.post("/llm/test", summary="大模型连通性测试")
+def test_llm() -> dict:
+    """发一次最小请求，验证 Key、模型名与**结构化输出契约**。
+
+    【为什么要做成接口而不是只在文档里写】
+        这个端点的行为相当反直觉：声明 type=object，返回的却是单元素数组。
+        写进文档没人会记得，做成接口，一条 curl 就能看到实际返回的顶层类型，
+        排查"到底是模型没配好还是解析写错了"时非常省事。
+    """
+    if not llm_service.enabled():
+        return {"ok": False, "reason": "未配置大模型（LLM_API_KEY 为空或 LLM_ENABLED=0）"}
+
+    schema = {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}, "city": {"type": "string"}},
+        "required": ["ok", "city"],
+        "additionalProperties": False,
+    }
+    raw_obj = llm_service.complete_json(
+        "你只输出结构化数据，不要解释。",
+        "把这句话结构化：北京可用。城市填北京，ok 填 true。",
+        schema,
+    )
+    return {
+        "ok": raw_obj is not None,
+        "model": llm_service.status()["model"],
+        "parsed": raw_obj,
+        "note": "解析层已把端点的单元素数组外壳拆掉，这里看到的是拆壳后的对象",
+    }
