@@ -139,6 +139,34 @@ def test_validate_accepts_pool_names():
     assert meta["valid_ratio"] == 1.0
 
 
+def test_validate_keeps_source_from_pool():
+    """核对时必须把候选池里的出处带到结果上。
+
+    【这条测试防的是什么】
+        模型只返回地名，出处只有我们这边知道。
+        核对时若只重建 {name, note}，出处就在这一步丢了，
+        Activity.source 恒为 None —— 界面上「攻略出处」那一栏
+        在大模型路径下永远是空的（规则路径反而正常，所以极易漏测）。
+        出处是防幻觉设计的对外证据，不该只活在池子里。
+    """
+    meta = {}
+    days = llm_service._validate(_day_ok()["days"], _ctx(), meta)
+    assert days is not None
+    assert days[0]["activities"][0]["_source"] == "本地攻略 · 北京"
+    assert days[1]["activities"][0]["_source"] == "高德POI · 风景名胜"
+
+
+def test_validate_end_to_end_activities_carry_source():
+    """再走一层 _days_from_llm，确认 Activity.source 真的落到了契约字段上。"""
+    from app.services import trip_service
+
+    raw = llm_service._validate(_day_ok()["days"], _ctx(), {})
+    itinerary, _ = trip_service._days_from_llm(raw, ["北京"], {"北京": _pool()["北京"]}, per_day=2)
+    sources = [a.source for d in itinerary for a in d.activities]
+    assert sources, "行程里必须有活动"
+    assert all(s for s in sources), f"出处不该出现空值：{sources}"
+
+
 def test_validate_drops_hallucinated_places():
     """模型编的地名必须被丢掉 —— 这是防幻觉的唯一有效手段。
 

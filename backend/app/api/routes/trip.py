@@ -9,6 +9,8 @@
     POST /api/trip/route               出发地 → 目的地 路线规划 + 中途推荐
     GET  /api/trip/{id}/packing-list   打包清单
     GET  /api/trip/{id}/calendar.ics   导出日历
+    GET  /api/trip/{id}/export.docx    导出 Word 行程单
+    GET  /api/trip/{id}/export.pdf     导出 PDF 行程单
     POST /api/trip/{id}/share          生成只读分享链接
 """
 
@@ -21,6 +23,7 @@ from app.models.route import RoutePlan
 from app.models.share import ShareInfo
 from app.models.trip import PackingList, TripPlan, TripRequest, TripSummary
 from app.services import (
+    export_service,
     ics_service,
     packing_service,
     route_service,
@@ -46,6 +49,26 @@ def _require_trip(trip_id: str) -> TripPlan:
     if plan is None:
         raise HTTPException(status_code=404, detail="行程不存在")
     return plan
+
+
+def _file_response(content: bytes | str, filename: str, media_type: str) -> Response:
+    """把生成好的文件包成下载响应。
+
+    【为什么要抽成一个函数】
+        ICS / Word / PDF 三个导出接口除了内容和 MIME 之外完全一样。
+        中文文件名必须走 RFC 5987 的 filename* 形式，
+        否则部分浏览器会把「西安」显示成乱码 —— 这条规则只该写一次，
+        漏写一处就是一个只有中文用户才会遇到的 bug。
+    """
+    body = content.encode("utf-8") if isinstance(content, str) else content
+    return Response(
+        content=body,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.post("/generate", response_model=TripPlan, summary="生成行程")
@@ -101,16 +124,27 @@ def download_calendar(trip_id: str) -> Response:
     plan = _require_trip(trip_id)
     content = ics_service.build_ics(plan)
     filename = ics_service.ics_filename(plan)
+    return _file_response(content, filename, "text/calendar; charset=utf-8")
 
-    # 中文文件名必须走 RFC 5987 的 filename* 形式，否则部分浏览器会乱码
-    return Response(
-        content=content,
-        media_type="text/calendar; charset=utf-8",
-        headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
-            "Cache-Control": "no-store",
-        },
+
+@router.get("/{trip_id}/export.docx", summary="导出 Word 行程单")
+def download_docx(trip_id: str) -> Response:
+    """导出可编辑、可打印的 Word 行程单（逐日行程 + 预算 + 打包清单）。"""
+    plan = _require_trip(trip_id)
+    content = export_service.build_docx(plan)
+    return _file_response(
+        content,
+        export_service.export_filename(plan, "docx"),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
+
+@router.get("/{trip_id}/export.pdf", summary="导出 PDF 行程单")
+def download_pdf(trip_id: str) -> Response:
+    """导出服务端生成的 PDF 行程单 —— 不依赖用户浏览器打印。"""
+    plan = _require_trip(trip_id)
+    content = export_service.build_pdf(plan)
+    return _file_response(content, export_service.export_filename(plan, "pdf"), "application/pdf")
 
 
 @router.post("/{trip_id}/share", response_model=ShareInfo, summary="创建分享链接")

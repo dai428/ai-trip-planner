@@ -335,11 +335,24 @@ def _validate(days, ctx: dict, meta: dict) -> list[dict] | None:
         至少那份是完整可用的。
     """
     candidates: dict[str, dict[str, set[str]]] = {}
+    # 名字 → 出处（如「本地攻略 · 北京」/「高德POI · 风景名胜」）。
+    # 【为什么必须建这张表】
+    #   模型只返回地名，出处是我们这边的候选池才知道的信息。
+    #   核对时若只留 name/note，出处就在这一步被丢掉，
+    #   下游 Activity.source 恒为 None —— 结果是"每条安排标注出处"
+    #   这个大模型路径下整条失效（规则路径反而正常，所以很难被发现）。
+    #   出处是防幻觉设计的对外证据，丢了等于白做核对。
+    sources: dict[str, str] = {}
     for city in ctx["cities"]:
         pool = ctx["pool_by_city"][city]
         candidates[city] = {
             k: {it["name"] for it in pool.get(k, [])} for k in ("景点", "美食", "住宿")
         }
+        for kind in ("景点", "美食"):
+            for it in pool.get(kind, []):
+                if it.get("name") and it.get("_source"):
+                    # 同名条目以先出现的为准：攻略排在候选池前面，优先认它
+                    sources.setdefault(it["name"], it["_source"])
     # 全量合法名字（模型偶尔会把景点归到别的城市，只要池子里有就认）
     all_names: set[str] = set()
     for by_kind in candidates.values():
@@ -379,10 +392,12 @@ def _validate(days, ctx: dict, meta: dict) -> list[dict] | None:
             # 优先认"本城市的候选"；名字合法但归错城市也接受 ——
             # 城市归属本来就由我们按分段覆盖，不必因此丢掉一条好推荐。
             if name in candidates[city]["景点"] or name in candidates[city]["美食"]:
-                acts.append({"name": name, "note": (a.get("note") or "").strip()})
+                acts.append({"name": name, "note": (a.get("note") or "").strip(),
+                             "_source": sources.get(name)})
                 valid_slots += 1
             elif name in all_names:
-                acts.append({"name": name, "note": (a.get("note") or "").strip()})
+                acts.append({"name": name, "note": (a.get("note") or "").strip(),
+                             "_source": sources.get(name)})
                 valid_slots += 1
             else:
                 dropped += 1

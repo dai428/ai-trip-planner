@@ -46,6 +46,26 @@ def git(*args):
                           text=True, encoding='utf-8', check=True).stdout.strip()
 
 
+def _opener():
+    """绕开系统代理直连 api.github.com。
+
+    【为什么必须显式禁用代理】
+        Windows 注册表里配了本地代理（如 Clash 的 127.0.0.1:7897）时，
+        urllib 会通过 getproxies() 自动读取它并走该代理，
+        表现为 SSL UNEXPECTED_EOF_WHILE_READING / 握手失败 —— 看起来像"被墙"，
+        实际是"代理没通"。同一台机器上 curl（schannel）也会报 TLS 握手失败，
+        而 gh CLI 自己处理代理因此正常，很容易误判成网络封锁。
+        这里禁用代理直连：实测 api.github.com 直连 TLSv1.3 正常。
+        需要走代理时设环境变量 PUSH_VIA_API_PROXY 覆盖。
+    """
+    proxy = os.environ.get('PUSH_VIA_API_PROXY', '')
+    handlers = [urllib.request.ProxyHandler({'http': proxy, 'https': proxy} if proxy else {})]
+    return urllib.request.build_opener(*handlers)
+
+
+_OPENER = _opener()
+
+
 def api(method, path, payload=None):
     req = urllib.request.Request(
         f'{API}{path}',
@@ -60,7 +80,7 @@ def api(method, path, payload=None):
         method=method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=90) as r:
+        with _OPENER.open(req, timeout=90) as r:
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         raise RuntimeError(f'{method} {path} -> HTTP {e.code}: {e.read().decode()[:400]}') from None

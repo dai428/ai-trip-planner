@@ -43,14 +43,38 @@ function reorder(dayIndex: number, from: number, to: number) {
 }
 
 async function exportCalendar() {
-  if (!plan.value) return
-  // 交给浏览器下载：ICS 是文件流，用 <a download> 比 fetch 更省事
+  download(plan.value ? api.icsUrl(plan.value.id) : '')
+}
+
+/**
+ * 统一的下文件动作。
+ *
+ * 【为什么要合成一个函数】
+ *   ICS / Word / PDF 三个导出都是"给个地址、让浏览器下载"，
+ *   差别只在 URL。之前只有 ICS 时是一段内联代码，
+ *   加到三个还各写一遍，就是三份重复的 DOM 操作。
+ *
+ * 【为什么要 <a download> 而不是 window.open】
+ *   window.open 会被拦截器当弹窗挡掉，而且失败时用户只看到"什么都没发生"。
+ *   临时 <a> + click 是同步的用户手势触发，不会被拦；
+ *   加 download 属性则强制下载而不是在标签页里预览二进制。
+ */
+function download(url: string) {
+  if (!url) return
   const a = document.createElement('a')
-  a.href = api.icsUrl(plan.value.id)
+  a.href = url
   a.download = ''
   document.body.appendChild(a)
   a.click()
   a.remove()
+}
+
+function exportDocx() {
+  if (plan.value) download(api.exportDocxUrl(plan.value.id))
+}
+
+function exportPdf() {
+  if (plan.value) download(api.exportPdfUrl(plan.value.id))
 }
 
 async function makeShare() {
@@ -156,7 +180,15 @@ onMounted(async () => {
               <span v-if="shareBusy" class="spinner" style="width: 13px; height: 13px" />
               分享
             </button>
-            <button class="btn btn-primary btn-sm" @click="exportCalendar">导出日历</button>
+            <button class="btn btn-primary btn-sm" @click="exportPdf" title="服务端生成 PDF，含逐日行程、预算与打包清单">
+              导出 PDF
+            </button>
+            <button class="btn btn-outline btn-sm" @click="exportDocx" title="可再编辑的 Word 行程单">
+              导出 Word
+            </button>
+            <button class="btn btn-outline btn-sm" @click="exportCalendar" title="导入手机日历，每天一个全天事件">
+              导出日历
+            </button>
           </div>
         </div>
 
@@ -174,7 +206,8 @@ onMounted(async () => {
         </p>
 
         <p v-if="dirty" class="section-hint">
-          你已手动调整过顺序——调整只作用于当前页面，刷新后会回到原始安排。
+          你已手动调整过顺序——调整只作用于当前页面，刷新后会回到原始安排；
+          <strong>导出 PDF / Word 用的也是服务端的原始顺序</strong>，不含你刚才的拖动。
         </p>
       </section>
 

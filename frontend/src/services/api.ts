@@ -108,4 +108,16 @@ export const api = {
 
   /** ICS 是文件下载，直接给浏览器地址，不走 fetch */
   icsUrl: (id: string) => `/api/trip/${id}/calendar.ics`,
+
+  /**
+   * Word / PDF 行程单同样是文件下载，同样直接给地址。
+   *
+   * 【为什么不 fetch 再转 blob】
+   *   走 fetch 要自己处理文件名（Content-Disposition 里的 filename* 是 RFC 5987
+   *   编码的，解析它得再写一遍 percent-decode），而 `<a download>` 会让浏览器
+   *   直接采用响应头里的文件名 —— 中文名也不会乱码。
+   *   少一次全量数据过 JS 内存，几十 KB 的文档直接落盘。
+   */
+  exportDocxUrl: (id: string) => `/api/trip/${id}/export.docx`,
+  exportPdfUrl: (id: string) => `/api/trip/${id}/export.pdf`,
 }
